@@ -4,7 +4,6 @@
 #include <iterator>
 #include <vector>
 #include "itkObjectFactory.h"
-#include "itkImageSliceConstIteratorWithIndex.h"
 #include "IRISSlicer/IRISSlicer.h"
 #include "itkImage.h"
 #include <cmath>
@@ -16,18 +15,18 @@
 namespace itk
 {
 
-template< class TInputImage, class TOutputImage>
-DataObject::Pointer BinaryWeightedAveragingFilter <TInputImage, TOutputImage >::MakeOutput(unsigned int idx)
+template< class TLabelImage, class TMainImage>
+DataObject::Pointer BinaryWeightedAveragingFilter <TLabelImage, TMainImage >::MakeOutput(unsigned int idx)
 {
     DataObject::Pointer output;
 
     switch ( idx )
     {
     case 0:
-        output = ( TInputImage::New() ).GetPointer();
+        output = ( TLabelImage::New() ).GetPointer();
         break;
     case 1:
-        output = ( TOutputImage::New() ).GetPointer();
+        output = ( TMainImage::New() ).GetPointer();
         break;
     default:
         std::cerr << "No output " << idx << std::endl;
@@ -37,8 +36,8 @@ DataObject::Pointer BinaryWeightedAveragingFilter <TInputImage, TOutputImage >::
     return output.GetPointer();
 }
 
-template< class TInputImage, class TOutputImage >
-BinaryWeightedAveragingFilter< TInputImage, TOutputImage >::BinaryWeightedAveragingFilter()
+template< class TLabelImage, class TMainImage >
+BinaryWeightedAveragingFilter< TLabelImage, TMainImage >::BinaryWeightedAveragingFilter()
 {
     this->SetNumberOfRequiredOutputs(2);
     this->SetNumberOfRequiredInputs(1);
@@ -46,52 +45,42 @@ BinaryWeightedAveragingFilter< TInputImage, TOutputImage >::BinaryWeightedAverag
     this->SetNthOutput( 1, this->MakeOutput(1) );
 }
 
-template< class TInputImage, class TOutputImage>
-TInputImage* BinaryWeightedAveragingFilter<TInputImage, TOutputImage >::GetInterpolation()
+template< class TLabelImage, class TMainImage>
+TLabelImage* BinaryWeightedAveragingFilter<TLabelImage, TMainImage >::GetInterpolation()
 {
-    return dynamic_cast< TInputImage * >(this->ProcessObject::GetOutput(0) );
+    return dynamic_cast< TLabelImage * >(this->ProcessObject::GetOutput(0) );
 }
 
-template< class TInputImage, class TOutputImage>
-TOutputImage* BinaryWeightedAveragingFilter<TInputImage, TOutputImage >::GetProbabilityMap()
+template< class TLabelImage, class TMainImage>
+TMainImage* BinaryWeightedAveragingFilter<TLabelImage, TMainImage >::GetProbabilityMap()
 {
-    return dynamic_cast< TOutputImage * >(this->ProcessObject::GetOutput(1) );
+    return dynamic_cast< TMainImage * >(this->ProcessObject::GetOutput(1) );
 }
 
 
-template< class TInputImage, class TOutputImage >
-void BinaryWeightedAveragingFilter< TInputImage, TOutputImage >
+template< class TLabelImage, class TMainImage >
+void BinaryWeightedAveragingFilter< TLabelImage, TMainImage >
 ::GenerateData()
 {
-    typename TInputImage::ConstPointer input = this->GetInput();
+    typename TLabelImage::ConstPointer input = this->GetInput();
 
     // Setup output 1
-    typename TInputImage::Pointer interpolation = this->GetInterpolation();
+    typename TLabelImage::Pointer interpolation = this->GetInterpolation();
     interpolation->SetBufferedRegion( input->GetLargestPossibleRegion() );
     interpolation->Allocate();
-    itk::ImageRegionConstIterator<TInputImage> It_interp(input,input->GetLargestPossibleRegion());
-    It_interp.GoToBegin();
-    while (!It_interp.IsAtEnd())
-    {
-        int val = input->GetPixel(It_interp.GetIndex());
-        interpolation->SetPixel(It_interp.GetIndex(), val);
-        ++It_interp;
-    }
+
+    ImageAlgorithm::Copy< TLabelImage, TLabelImage >( input.GetPointer(), interpolation.GetPointer(),
+      interpolation->GetRequestedRegion(), interpolation->GetRequestedRegion() );
 
     // Setup output 2
-    typename TOutputImage::Pointer probabilitymap = this->GetProbabilityMap();
+    typename TMainImage::Pointer probabilitymap = this->GetProbabilityMap();
     probabilitymap->SetBufferedRegion( input->GetLargestPossibleRegion() );
     probabilitymap->Allocate();
-    itk::ImageRegionConstIterator<TInputImage> It_pmap(input,input->GetLargestPossibleRegion());
-    It_pmap.GoToBegin();
-    while (!It_pmap.IsAtEnd())
-    {
-        double val = double(input->GetPixel(It_pmap.GetIndex()));
-        probabilitymap->SetPixel(It_pmap.GetIndex(), val);
-        ++It_pmap;
-    }
 
-    typedef itk::RegionOfInterestImageFilter<TInputImage, TInputImage> TrimFilter;
+    ImageAlgorithm::Copy< TLabelImage, TMainImage >( input.GetPointer(), probabilitymap.GetPointer(),
+      probabilitymap->GetRequestedRegion(), probabilitymap->GetRequestedRegion() );
+
+    typedef itk::RegionOfInterestImageFilter<TLabelImage, TLabelImage> TrimFilter;
     typename TrimFilter::Pointer TrimImageFilter = TrimFilter::New();
     TrimImageFilter->SetInput(input);
     TrimImageFilter->SetRegionOfInterest(m_boundingbox);
@@ -108,22 +97,24 @@ void BinaryWeightedAveragingFilter< TInputImage, TOutputImage >
     //Initialize filters to extract slices amd restack to form a 3D volume
 
     int totalSlices =  m_SegmentationIndices.size();
-    typedef IRISSlicer<TInputImage, T2DintImage, TInputImage> IrisSlicerFilterType;
+    typename TLabelImage::IndexType bbox_index = m_boundingbox.GetIndex();
+
+    typedef IRISSlicer< TLabelImage, TLabelImageSliceType, TLabelImage> IrisSlicerFilterType;
     typename IrisSlicerFilterType::Pointer Slicer[2];
 
     itk::FixedArray< unsigned int, 3 > layout;
     layout[0] = 1;
     layout[1] = 1;
     layout[2] = 0; // Set third element to zero to get a 3D volume [1,1,0]
-    typename TInputImage::PixelType filler = 0;
-    typename TOutputImage::PixelType filler_double = 0;
+
+    typename TLabelImage::PixelType filler = 0;
+    typename TMainImage::PixelType filler_double = 0;
 
     typename AndImageFilterType::Pointer Intersect[totalSlices-1];
     typename SignedDistanceMapFilterType::Pointer SignedDistanceMapIntersect[totalSlices - 1];
 
     for ( unsigned int i = 0; i < totalSlices-1; i++ )
     {
-        std::cout<< "Interpolating between " <<  m_SegmentationIndices[i] <<" and " <<  m_SegmentationIndices[i+1] <<std::endl;
 
         const int numSlices =  m_SegmentationIndices[i+1] -  m_SegmentationIndices[i];
         int intermediate_slice = numSlices/2;
@@ -131,7 +122,7 @@ void BinaryWeightedAveragingFilter< TInputImage, TOutputImage >
         // Extract the first slice
         Slicer[0] = IrisSlicerFilterType::New();
         Slicer[0]->SetInput(TrimImageFilter->GetOutput());
-        Slicer[0]->SetSliceIndex( m_SegmentationIndices[i]-1);
+        Slicer[0]->SetSliceIndex( m_SegmentationIndices[i]); // -1 in old version
         Slicer[0]->SetSliceDirectionImageAxis(m_slicingaxis); //Needs to generalize
         Slicer[0]->SetLineDirectionImageAxis(m_seconddirection);
         Slicer[0]->SetPixelDirectionImageAxis(m_firstdirection);
@@ -139,16 +130,26 @@ void BinaryWeightedAveragingFilter< TInputImage, TOutputImage >
         Slicer[0]->SetPixelTraverseForward(0);
         Slicer[0]->Update();
 
+//        WriterType::Pointer writer = WriterType::New();
+//        writer->SetInput(Slicer[0]->GetOutput());
+//        writer->SetFileName("slice 0.nii");
+//        writer->Update();
+
         // Extract the second slice
         Slicer[1] = IrisSlicerFilterType::New();
         Slicer[1]->SetInput(TrimImageFilter->GetOutput());
-        Slicer[1]->SetSliceIndex( m_SegmentationIndices[i+1]-1);
+        Slicer[1]->SetSliceIndex( m_SegmentationIndices[i+1]); //-1 in old version
         Slicer[1]->SetSliceDirectionImageAxis(m_slicingaxis);
         Slicer[1]->SetLineDirectionImageAxis(m_seconddirection);
         Slicer[1]->SetPixelDirectionImageAxis(m_firstdirection);
         Slicer[1]->SetLineTraverseForward(0);
         Slicer[1]->SetPixelTraverseForward(0);
         Slicer[1]->Update();
+
+//        WriterType::Pointer writer1 = WriterType::New();
+//        writer1->SetInput(Slicer[1]->GetOutput());
+//        writer1->SetFileName("slice 1.nii");
+//        writer1->Update();
 
         // Compute connected components
         //Compute A intersect B
@@ -170,7 +171,7 @@ void BinaryWeightedAveragingFilter< TInputImage, TOutputImage >
         DifferenceImage[0]->SetInput1(Slicer[0]->GetOutput());
         DifferenceImage[0]->SetInput2(Intersect[i]->GetOutput());
         DifferenceImage[0]->Update();
-        typename T2DintImage::Pointer AdiffB = DifferenceImage[0]->GetOutput();
+        typename TLabelImageSliceType::Pointer AdiffB = DifferenceImage[0]->GetOutput();
         AdiffB->DisconnectPipeline();
 
         // Compute B\A
@@ -178,11 +179,11 @@ void BinaryWeightedAveragingFilter< TInputImage, TOutputImage >
         DifferenceImage[1]->SetInput1(Slicer[1]->GetOutput());
         DifferenceImage[1]->SetInput2(Intersect[i]->GetOutput());
         DifferenceImage[1]->Update();
-        typename T2DintImage::Pointer BdiffA = DifferenceImage[1]->GetOutput();
+        typename TLabelImageSliceType::Pointer BdiffA = DifferenceImage[1]->GetOutput();
         BdiffA->DisconnectPipeline();
 
         //Calculate the connected components  in A \ B
-        ConnectedComponentImageFilterType::Pointer ConnectedAdifB = ConnectedComponentImageFilterType::New ();
+        typename ConnectedComponentImageFilterType::Pointer ConnectedAdifB = ConnectedComponentImageFilterType::New ();
         ConnectedAdifB->SetInput(AdiffB); // A\B
         ConnectedAdifB->Update();
 
@@ -192,15 +193,22 @@ void BinaryWeightedAveragingFilter< TInputImage, TOutputImage >
 
         //Initialize filters and varaibles to combine results across connected components
 
-        typename TInputImage::Pointer InterpolatedVolume[2];
-        typename TOutputImage::Pointer ProbabilityMap[2];
-        typename T2DintImage::Pointer InterpolatedVolume_intermediate[2];
-        typename T2DdoubleImage::Pointer ProbabilityMap_intermediate[2];
-
+        typename TLabelImage::Pointer InterpolatedVolume[2];
+        typename TMainImage::Pointer ProbabilityMap[2];
+        typename TLabelImageSliceType::Pointer InterpolatedVolume_intermediate[2];
+        typename TMainImageSliceType::Pointer ProbabilityMap_intermediate[2];
         typename TilerType::Pointer Tiler_Interp[numCCAdB];
         typename DoubleTilerType::Pointer Tiler_ERF[numCCAdB];
-
         typename SignedDistanceMapFilterType::Pointer SignedDistanceMapA_dash[numCCAdB];
+
+        itk::FixedArray<bool, TMainImage::ImageDimension > flipAxes;
+        flipAxes[m_firstdirection] = true;
+        flipAxes[m_seconddirection] = true;
+        flipAxes[m_slicingaxis] = false;
+
+        itk::FixedArray<bool, TMainImageSliceType::ImageDimension > flipAxesSliceType;
+        flipAxesSliceType[0] = true;
+        flipAxesSliceType[1] = true;
 
         //Loop through connected components in A\B
 
@@ -233,7 +241,7 @@ void BinaryWeightedAveragingFilter< TInputImage, TOutputImage >
 
             // First calculate the area of difference set A\B
             double AreaAB = 0;
-            itk::ImageRegionConstIterator<T2DintImage> It(ConnectedComponent_AdB[j]->GetOutput(),ConnectedComponent_AdB[j]->GetOutput()->GetLargestPossibleRegion());
+            itk::ImageRegionConstIterator<TLabelImageSliceType> It(ConnectedComponent_AdB[j]->GetOutput(),ConnectedComponent_AdB[j]->GetOutput()->GetLargestPossibleRegion());
             It.GoToBegin();
             while (!It.IsAtEnd())
             {
@@ -257,9 +265,9 @@ void BinaryWeightedAveragingFilter< TInputImage, TOutputImage >
                 double AreaIB = 0;
                 double t1 = t*(double(1)/(numElements-1));
 
-                itk::ImageRegionConstIterator<T2DdoubleImage> It_sdtA(SignedDistanceMapA_dash[j]->GetOutput(),SignedDistanceMapA_dash[j]->GetOutput()->GetLargestPossibleRegion());
-                itk::ImageRegionConstIterator<T2DdoubleImage> It_sdtIntersect(SignedDistanceMapIntersect[i]->GetOutput(),SignedDistanceMapIntersect[i]->GetOutput()->GetLargestPossibleRegion());
-                itk::ImageRegionConstIterator<T2DintImage> ItB(Intersect[i]->GetOutput(),Intersect[i]->GetOutput()->GetLargestPossibleRegion());
+                itk::ImageRegionConstIterator<TMainImageSliceType> It_sdtA(SignedDistanceMapA_dash[j]->GetOutput(),SignedDistanceMapA_dash[j]->GetOutput()->GetLargestPossibleRegion());
+                itk::ImageRegionConstIterator<TMainImageSliceType> It_sdtIntersect(SignedDistanceMapIntersect[i]->GetOutput(),SignedDistanceMapIntersect[i]->GetOutput()->GetLargestPossibleRegion());
+                itk::ImageRegionConstIterator<TLabelImageSliceType> ItB(Intersect[i]->GetOutput(),Intersect[i]->GetOutput()->GetLargestPossibleRegion());
 
                 It_sdtA.GoToBegin();
                 It_sdtIntersect.GoToBegin();
@@ -332,9 +340,9 @@ void BinaryWeightedAveragingFilter< TInputImage, TOutputImage >
                     ComputeInterpolation->SetConstant(tdash);
                     ComputeInterpolation->Update();
 
-                    T2DintImage::Pointer interp = ComputeInterpolation->GetInterpolation();
+                   typename  TLabelImageSliceType::Pointer interp = ComputeInterpolation->GetInterpolation();
                     interp->DisconnectPipeline();
-                    T2DdoubleImage::Pointer pmap = ComputeInterpolation->GetProbabilityMap();
+                    typename TMainImageSliceType::Pointer pmap = ComputeInterpolation->GetProbabilityMap();
                     pmap->DisconnectPipeline();
 
                     Tiler_Interp[j]->SetInput(t-1,interp);
@@ -408,7 +416,7 @@ void BinaryWeightedAveragingFilter< TInputImage, TOutputImage >
                     CombineComponentsFilterAdB->Update();
                     InterpolatedVolume_intermediate[0] = CombineComponentsFilterAdB->GetOutput();
 
-                    T2DMaximumImageFilterType::Pointer MaximumImageFilterAdB = T2DMaximumImageFilterType::New ();
+                    typename T2DMaximumImageFilterType::Pointer MaximumImageFilterAdB = T2DMaximumImageFilterType::New ();
                     MaximumImageFilterAdB->SetInput(0, ProbabilityMap_intermediate[0]);
                     MaximumImageFilterAdB->SetInput(1, ComputeInterpolation->GetProbabilityMap());
                     MaximumImageFilterAdB->Update();
@@ -424,7 +432,7 @@ void BinaryWeightedAveragingFilter< TInputImage, TOutputImage >
         //  **********************************************
 
         // Initialize filters and varaibled need to combine results across connected components
-        ConnectedComponentImageFilterType::Pointer ConnectedBdifA = ConnectedComponentImageFilterType::New ();
+        typename ConnectedComponentImageFilterType::Pointer ConnectedBdifA = ConnectedComponentImageFilterType::New ();
         ConnectedBdifA->SetInput(BdiffA); // B\A
         ConnectedBdifA->Update();
 
@@ -467,7 +475,7 @@ void BinaryWeightedAveragingFilter< TInputImage, TOutputImage >
 
             // Calcualte the area of the difference set
             double AreaAB = 0;
-            itk::ImageRegionConstIterator< T2DintImage > It(ConnectedComponent_BdA[j]->GetOutput(),ConnectedComponent_BdA[j]->GetOutput()->GetLargestPossibleRegion());
+            itk::ImageRegionConstIterator< TLabelImageSliceType > It(ConnectedComponent_BdA[j]->GetOutput(),ConnectedComponent_BdA[j]->GetOutput()->GetLargestPossibleRegion());
             It.GoToBegin();
             while (!It.IsAtEnd())
             {
@@ -489,9 +497,9 @@ void BinaryWeightedAveragingFilter< TInputImage, TOutputImage >
                 double B_diffI = 0;
                 double AreaIB = 0;
 
-                itk::ImageRegionConstIterator<T2DdoubleImage> It_sdtIntersect(SignedDistanceMapIntersect[i]->GetOutput(),SignedDistanceMapIntersect[i]->GetOutput()->GetLargestPossibleRegion());
-                itk::ImageRegionConstIterator<T2DdoubleImage> It_sdtB(SignedDistanceMapB_dash[j]->GetOutput(),SignedDistanceMapB_dash[j]->GetOutput()->GetLargestPossibleRegion());
-                itk::ImageRegionConstIterator<T2DintImage> ItB(B_dash[j]->GetOutput(),B_dash[j]->GetOutput()->GetLargestPossibleRegion());
+                itk::ImageRegionConstIterator<TMainImageSliceType> It_sdtIntersect(SignedDistanceMapIntersect[i]->GetOutput(),SignedDistanceMapIntersect[i]->GetOutput()->GetLargestPossibleRegion());
+                itk::ImageRegionConstIterator<TMainImageSliceType> It_sdtB(SignedDistanceMapB_dash[j]->GetOutput(),SignedDistanceMapB_dash[j]->GetOutput()->GetLargestPossibleRegion());
+                itk::ImageRegionConstIterator<TLabelImageSliceType> ItB(B_dash[j]->GetOutput(),B_dash[j]->GetOutput()->GetLargestPossibleRegion());
 
                 It_sdtIntersect.GoToBegin();
                 It_sdtB.GoToBegin();
@@ -538,8 +546,8 @@ void BinaryWeightedAveragingFilter< TInputImage, TOutputImage >
                 TilerBdA_Interp[j]->SetDefaultPixelValue( filler );
 
                 typename InterpolationFilterType:: Pointer ComputeInterpolation2;
-                T2DintImage::Pointer interp2;
-                T2DdoubleImage::Pointer pmap2;
+                typename TLabelImageSliceType::Pointer interp2;
+                typename TMainImageSliceType::Pointer pmap2;
 
                 for (int t = 1;t < numSlices; t++){
 
@@ -657,110 +665,66 @@ void BinaryWeightedAveragingFilter< TInputImage, TOutputImage >
 
         } // End of loop through connected components in B\A
 
-        itk::ImageSliceConstIteratorWithIndex<TInputImage> It_destination( input, input->GetRequestedRegion() );
-        It_destination.SetFirstDirection(m_firstdirection);
-        It_destination.SetSecondDirection(m_seconddirection);
-        It_destination.GoToBegin();
-
         if ( m_intermediateslices == false){
 
             typename ThreeDOrImageFilterType::Pointer CombineInterpolations = ThreeDOrImageFilterType::New();
             CombineInterpolations->SetInput1(InterpolatedVolume[0]);
             CombineInterpolations->SetInput2(InterpolatedVolume[1]);
             CombineInterpolations->Update();
-            typename TInputImage::Pointer interpolated_segment = CombineInterpolations->GetOutput();
+            typename TLabelImage::Pointer interpolated_segment = CombineInterpolations->GetOutput();
             interpolated_segment->DisconnectPipeline();
 
             typename MaximumImageFilterType::Pointer CombineProbabilityMaps = MaximumImageFilterType::New ();
             CombineProbabilityMaps->SetInput(0, ProbabilityMap[0]);
             CombineProbabilityMaps->SetInput(1, ProbabilityMap[1]);
             CombineProbabilityMaps->Update();
-            typename TOutputImage::Pointer pmap_segment = CombineProbabilityMaps->GetOutput();
+            typename TMainImage::Pointer pmap_segment = CombineProbabilityMaps->GetOutput();
             pmap_segment->DisconnectPipeline();
 
-            typename TInputImage::SizeType sourceDim = interpolated_segment->GetLargestPossibleRegion().GetSize();
+            typename PermuteAxesImageFilterType::Pointer permute_axes = PermuteAxesImageFilterType::New();
+            permute_axes->SetInput(interpolated_segment);
+            typename PermuteAxesImageFilterType::PermuteOrderArrayType order;
+            order[0] = 2;
+            order[1] = 0;
+            order[2] = 1;
+            permute_axes->SetOrder( order );
 
-//            std::cout << "Copying interpolated region to original image space" << std::endl;
-            itk::ImageSliceConstIteratorWithIndex<TInputImage> It_source( interpolated_segment, interpolated_segment->GetLargestPossibleRegion() );
-            It_source.SetFirstDirection(0);
-            It_source.SetSecondDirection(1);
-            It_source.GoToBegin();
+            typename FlipImageFilterType::Pointer flip_image = FlipImageFilterType::New();
+            flip_image->SetInput(permute_axes->GetOutput());
+            flip_image->SetFlipAxes(flipAxes);
+            flip_image->Update();
+            typename TLabelImage::Pointer permuted_region = flip_image->GetOutput();
 
-            int pixel_val;
+            typename TLabelImage::IndexType newRegionIndex = bbox_index;
+            newRegionIndex[m_slicingaxis] = bbox_index[m_slicingaxis] + m_SegmentationIndices[i] +1;
+            typename TLabelImage::RegionType newRegion = permuted_region->GetLargestPossibleRegion();
+            newRegion.SetIndex(newRegionIndex) ;
 
-            typename TInputImage::IndexType idx;
-            typename TInputImage::IndexType source_idx;
-
-            while( !It_source.IsAtEnd() )
-            {
-                while( !It_source.IsAtEndOfSlice() )
-                {
-
-                    while( !It_source.IsAtEndOfLine() )
-                    {
-
-                        idx  = It_destination.GetIndex();
-                        source_idx = It_source.GetIndex();
-                        idx[0] = idx[0] +  m_SegmentationIndices[i];
-
-                        source_idx[0] = sourceDim[0] - source_idx[0] -1;
-                        source_idx[1] = sourceDim[1] - source_idx[1] - 1;
-
-                        pixel_val = interpolated_segment->GetPixel(source_idx);
-                        interpolation->SetPixel(idx, pixel_val);
-
-                        ++It_source;
-                        ++It_destination;
-                    }
-                    It_source.NextLine();
-                    It_destination.NextLine();
-                }
-                It_source.NextSlice();
-                It_destination.NextSlice();
-            }
+            ImageAlgorithm::Copy< TLabelImage, TLabelImage >( permuted_region.GetPointer(), interpolation.GetPointer(),
+              permuted_region->GetLargestPossibleRegion(), newRegion);
 
             // Copy probability map
-//            std::cout << "Copying probability map to original image space" << std::endl;
-            itk::ImageSliceConstIteratorWithIndex<TOutputImage> It_sourceprob( pmap_segment, pmap_segment->GetLargestPossibleRegion() );
-            It_sourceprob.SetFirstDirection(0);
-            It_sourceprob.SetSecondDirection(1);
+            typename PermuteAxesDoubleImageFilterType::Pointer permute_axes_double = PermuteAxesDoubleImageFilterType::New();
+            permute_axes_double->SetInput(pmap_segment);
+            typename PermuteAxesDoubleImageFilterType::PermuteOrderArrayType pmap_order;
+            pmap_order[0] = 2;
+            pmap_order[1] = 0;
+            pmap_order[2] = 1;
+            permute_axes_double->SetOrder( order );
 
-            itk::ImageSliceConstIteratorWithIndex<TInputImage> It_destinationprob( input, input->GetRequestedRegion() );
-            It_destinationprob.SetFirstDirection(m_firstdirection);
-            It_destinationprob.SetSecondDirection(m_seconddirection);
+            typename FlipDoubleImageFilterType::Pointer flip_double_image = FlipDoubleImageFilterType::New();
+            flip_double_image->SetInput(permute_axes_double->GetOutput());
+            flip_double_image->SetFlipAxes(flipAxes);
+            flip_double_image->Update();
+            typename TMainImage::Pointer permuted_double_region = flip_double_image->GetOutput();
 
-            It_destinationprob.GoToBegin();
-            It_sourceprob.GoToBegin();
-            typename TOutputImage::IndexType idx_prob;
-            typename TOutputImage::IndexType source_idx_prob;
-            double prob_val;
+            typename TMainImage::IndexType newRegionIndex_double = bbox_index;
+            newRegionIndex_double[m_slicingaxis] = bbox_index[m_slicingaxis] + m_SegmentationIndices[i] +1;
+            typename TMainImage::RegionType newRegion_double = permuted_double_region->GetLargestPossibleRegion();
+            newRegion_double.SetIndex(newRegionIndex_double) ;
 
-            while( !It_sourceprob.IsAtEnd() )
-            {
-                while( !It_sourceprob.IsAtEndOfSlice() )
-                {
-                    while( !It_sourceprob.IsAtEndOfLine() )
-                    {
-
-                        idx_prob  = It_destinationprob.GetIndex();
-                        source_idx_prob = It_sourceprob.GetIndex();
-                        idx_prob[0] = idx_prob[0] +  m_SegmentationIndices[i];
-                        source_idx_prob[0] = sourceDim[0] - source_idx_prob[0] -1;
-                        source_idx_prob[1] = sourceDim[1] - source_idx_prob[1] -1;
-
-                        prob_val = pmap_segment->GetPixel(source_idx_prob);
-                        probabilitymap->SetPixel(idx_prob, prob_val);
-
-                        ++It_sourceprob;
-                        ++It_destinationprob;
-                    }
-
-                    It_sourceprob.NextLine();
-                    It_destinationprob.NextLine();
-                }
-                It_sourceprob.NextSlice();
-                It_destinationprob.NextSlice();
-            }
+            ImageAlgorithm::Copy< TMainImage, TMainImage >( permuted_double_region.GetPointer(), probabilitymap.GetPointer(),
+              permuted_double_region->GetLargestPossibleRegion(), newRegion_double);
         }
 
         if ( m_intermediateslices == true){
@@ -769,100 +733,57 @@ void BinaryWeightedAveragingFilter< TInputImage, TOutputImage >
             CombineInterpolations->SetInput1(InterpolatedVolume_intermediate[0]);
             CombineInterpolations->SetInput2(InterpolatedVolume_intermediate[1]);
             CombineInterpolations->Update();
-            typename T2DintImage::Pointer interpolated_segment = CombineInterpolations->GetOutput();
+            typename TLabelImageSliceType::Pointer interpolated_segment = CombineInterpolations->GetOutput();
             interpolated_segment->DisconnectPipeline();
 
             typename T2DMaximumImageFilterType::Pointer CombineProbabilityMaps = T2DMaximumImageFilterType::New ();
             CombineProbabilityMaps->SetInput(0, ProbabilityMap_intermediate[0]);
             CombineProbabilityMaps->SetInput(1, ProbabilityMap_intermediate[1]);
             CombineProbabilityMaps->Update();
-            typename T2DdoubleImage::Pointer pmap_segment = CombineProbabilityMaps->GetOutput();
+            typename TMainImageSliceType::Pointer pmap_segment = CombineProbabilityMaps->GetOutput();
             pmap_segment->DisconnectPipeline();
 
-            typename T2DintImage::SizeType sourceDim = interpolated_segment->GetLargestPossibleRegion().GetSize();
-//            std::cout << sourceDim << std::endl;
+            typename TLabelImageSliceType::SizeType sourceDim = interpolated_segment->GetLargestPossibleRegion().GetSize();
 
-//            std::cout << "Copying interpolated region to original image space" << std::endl;
-            itk::ImageSliceConstIteratorWithIndex<T2DintImage> It_source( interpolated_segment, interpolated_segment->GetLargestPossibleRegion() );
-            It_source.SetFirstDirection(0);
-            It_source.SetSecondDirection(1);
-            It_source.GoToBegin();
+            typename FlipSliceImageFilterType::Pointer flip_image = FlipSliceImageFilterType::New();
+            flip_image->SetInput(interpolated_segment);
+            flip_image->SetFlipAxes(flipAxesSliceType);
+            flip_image->Update();
+            typename TLabelImageSliceType::Pointer permuted_region = flip_image->GetOutput();
 
-            int pixel_val;
-            typename TInputImage::IndexType idx;
-            typename T2DintImage::IndexType source_idx;
+            typename TLabelImage::IndexType newRegionIndex = bbox_index;
+            newRegionIndex[m_slicingaxis] = bbox_index[m_slicingaxis] + m_SegmentationIndices[i] + intermediate_slice;
+            typename TLabelImage::SizeType newRegionSize;
+            newRegionSize[0] = 1;
+            newRegionSize[1] = sourceDim[0];
+            newRegionSize[2] = sourceDim[1];
+            typename TMainImage::RegionType newRegion;
+            newRegion.SetSize(newRegionSize);
+            newRegion.SetIndex(newRegionIndex) ;
 
-            while( !It_source.IsAtEnd() )
-            {
-                while( !It_source.IsAtEndOfSlice() )
-                {
-
-                    while( !It_source.IsAtEndOfLine() )
-                    {
-
-                        idx  = It_destination.GetIndex();
-                        source_idx = It_source.GetIndex();
-                        idx[0] = idx[0] +  m_SegmentationIndices[i] + intermediate_slice -1;
-
-                        source_idx[0] = sourceDim[0] - source_idx[0] -1;
-                        source_idx[1] = sourceDim[1] - source_idx[1] - 1;
-
-                        pixel_val = interpolated_segment->GetPixel(source_idx);
-                        interpolation->SetPixel(idx, pixel_val);
-
-                        ++It_source;
-                        ++It_destination;
-                    }
-                    It_source.NextLine();
-                    It_destination.NextLine();
-                }
-                It_source.NextSlice();
-                It_destination.NextSlice();
-            }
+            ImageAlgorithm::Copy< TLabelImageSliceType, TLabelImage >( permuted_region.GetPointer(), interpolation.GetPointer(),
+              permuted_region->GetLargestPossibleRegion(), newRegion);
 
             // Copy probability map
-//            std::cout << "Copying probability map to original image space" << std::endl;
-            itk::ImageSliceConstIteratorWithIndex<T2DdoubleImage> It_sourceprob(pmap_segment,pmap_segment->GetLargestPossibleRegion() );
-            It_sourceprob.SetFirstDirection(0);
-            It_sourceprob.SetSecondDirection(1);
 
-            itk::ImageSliceConstIteratorWithIndex<TInputImage> It_destinationprob( input, input->GetRequestedRegion() );
-            It_destinationprob.SetFirstDirection(m_firstdirection);
-            It_destinationprob.SetSecondDirection(m_seconddirection);
+            typename FlipDoubleSliceImageFilterType::Pointer flip_double_image = FlipDoubleSliceImageFilterType::New();
+            flip_double_image->SetInput(pmap_segment);
+            flip_double_image->SetFlipAxes(flipAxesSliceType);
+            flip_double_image->Update();
+            typename TMainImageSliceType::Pointer permuted_double_region = flip_double_image->GetOutput();
 
-            It_destinationprob.GoToBegin();
-            It_sourceprob.GoToBegin();
-            typename TOutputImage::IndexType idx_prob;
-            typename T2DdoubleImage::IndexType source_idx_prob;
-            double prob_val;
+            typename TMainImage::IndexType newRegionIndex_double = bbox_index;
+            newRegionIndex_double[m_slicingaxis] = bbox_index[m_slicingaxis] + m_SegmentationIndices[i] + intermediate_slice;
+            typename TMainImage::RegionType newRegion_double;
+            typename TMainImage::SizeType newRegionSize_double;
+            newRegionSize_double[0] = 1;
+            newRegionSize_double[1] = sourceDim[0];
+            newRegionSize_double[2] = sourceDim[1];
+            newRegion_double.SetSize(newRegionSize_double);
+            newRegion_double.SetIndex(newRegionIndex_double) ;
 
-            while( !It_sourceprob.IsAtEnd() )
-            {
-                while( !It_sourceprob.IsAtEndOfSlice() )
-                {
-                    while( !It_sourceprob.IsAtEndOfLine() )
-                    {
-
-                        idx_prob  = It_destinationprob.GetIndex();
-                        source_idx_prob = It_sourceprob.GetIndex();
-                        idx_prob[0] = idx_prob[0] +  m_SegmentationIndices[i] + intermediate_slice -1;
-                        source_idx_prob[0] = sourceDim[0] - source_idx_prob[0] -1;
-                        source_idx_prob[1] = sourceDim[1] - source_idx_prob[1] -1;
-
-                        prob_val = pmap_segment->GetPixel(source_idx_prob);
-                        probabilitymap->SetPixel(idx_prob, prob_val);
-
-                        ++It_sourceprob;
-                        ++It_destinationprob;
-                    }
-
-                    It_sourceprob.NextLine();
-                    It_destinationprob.NextLine();
-
-                }
-                It_sourceprob.NextSlice();
-                It_destinationprob.NextSlice();
-            }
+            ImageAlgorithm::Copy< TMainImageSliceType, TMainImage >( permuted_double_region.GetPointer(), probabilitymap.GetPointer(),
+              permuted_double_region->GetLargestPossibleRegion(), newRegion_double);
         }
 
     } // End of loop through slices

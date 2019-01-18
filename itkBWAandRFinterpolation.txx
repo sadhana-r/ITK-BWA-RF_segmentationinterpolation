@@ -1,18 +1,23 @@
 #ifndef ITKBWAANDRFINTERPOLATION_HXX
 #define ITKBWAANDRFINTERPOLATION_HXX
 
+#include <math.h>
+#include <itkSize.h>
 #include "itkObjectFactory.h"
 #include "itkImageRegionConstIterator.h"
 #include "itkImageRegionIterator.h"
-#include <math.h>
-#include "itkImageFileWriter.h"
+#include "itkBWAandRFinterpolation.h"
+#include "RFLibrary/ImageCollectionToImageFilter.h"
+
 
 namespace itk
 {
 
-template< class TInputImage, class TOutputImage>
-CombineBWAandRFFilter <TInputImage,TOutputImage>
+template< class ImageScalarType, class ImageVectorType, class TLabelImage>
+CombineBWAandRFFilter <ImageScalarType,  ImageVectorType,TLabelImage>
 ::CombineBWAandRFFilter ()
+    : m_Label( 0 ),
+      m_LabeledSlices( TLabelImage::ImageDimension ) // initialize with empty sets
 {
     this->SetNumberOfRequiredInputs(2);
     this->SetNumberOfRequiredOutputs(2);
@@ -22,60 +27,66 @@ CombineBWAandRFFilter <TInputImage,TOutputImage>
 
 }
 
-template< class TInputImage, class TOutputImage>
+template< class ImageScalarType, class ImageVectorType, class TLabelImage>
 void
-CombineBWAandRFFilter <TInputImage,TOutputImage>
-::SetIntensityImage(const TInputImage* image)
+CombineBWAandRFFilter <ImageScalarType,  ImageVectorType,TLabelImage>
+::AddScalarImage(ImageScalarType *image)
 {
-    this->SetNthInput(0, const_cast<TInputImage*>(image));
+    this->SetNthInput(0, const_cast<ImageScalarType*>(image));
 }
 
-template< class TInputImage, class TOutputImage>
+template< class ImageScalarType, class ImageVectorType, class TLabelImage>
 void
-CombineBWAandRFFilter <TInputImage,TOutputImage>
-::SetSegmentationImage(const TOutputImage* mask)
+CombineBWAandRFFilter <ImageScalarType,  ImageVectorType,TLabelImage>
+::AddVectorImage(ImageVectorType *image)
 {
-    this->SetNthInput(1, const_cast<TOutputImage*>(mask));
+    this->SetNthInput(0, const_cast<ImageVectorType*>(image));
 }
 
-template< class TInputImage, class TOutputImage>
-typename TInputImage::ConstPointer CombineBWAandRFFilter <TInputImage,TOutputImage>::GetIntensityImage()
+template< class ImageScalarType, class ImageVectorType, class TLabelImage>
+void
+CombineBWAandRFFilter <ImageScalarType,  ImageVectorType,TLabelImage>
+::SetSegmentationImage(const TLabelImage* mask)
 {
-    return static_cast< const TInputImage * >
-            ( this->ProcessObject::GetInput(0) );
+    this->SetNthInput(1, const_cast<TLabelImage*>(mask));
 }
 
-template< class TInputImage, class TOutputImage>
-typename TOutputImage::ConstPointer CombineBWAandRFFilter <TInputImage,TOutputImage>::GetSegmentationImage()
+template< class ImageScalarType, class ImageVectorType, class TLabelImage>
+typename TLabelImage::ConstPointer
+CombineBWAandRFFilter<ImageScalarType,  ImageVectorType,TLabelImage>
+::GetSegmentationImage()
 {
-    return static_cast< const TOutputImage * >
+    return static_cast< const TLabelImage * >
             ( this->ProcessObject::GetInput(1) );
 }
 
-template< class TInputImage, class TOutputImage>
-TOutputImage* CombineBWAandRFFilter <TInputImage, TOutputImage>::GetInterpolation()
+template< class ImageScalarType, class ImageVectorType, class TLabelImage>
+TLabelImage * CombineBWAandRFFilter <ImageScalarType,  ImageVectorType,TLabelImage>
+::GetInterpolation()
 {
-    return dynamic_cast< TOutputImage * >(this->ProcessObject::GetOutput(0) );
+    return dynamic_cast< TLabelImage * >(this->ProcessObject::GetOutput(0) );
 }
 
-template< class TInputImage, class TOutputImage>
-TInputImage* CombineBWAandRFFilter <TInputImage, TOutputImage>::GetProbabilityMap()
+template< class ImageScalarType, class ImageVectorType, class TLabelImage>
+ProbabilityType * CombineBWAandRFFilter <ImageScalarType,  ImageVectorType,TLabelImage>
+::GetProbabilityMap()
 {
-    return dynamic_cast< TInputImage * >(this->ProcessObject::GetOutput(1) );
+    return dynamic_cast< ProbabilityType * >(this->ProcessObject::GetOutput(1) );
 }
 
-template< typename TInputImage, typename TOutputImage >
-DataObject::Pointer CombineBWAandRFFilter <TInputImage, TOutputImage>::MakeOutput(unsigned int idx)
+template< class ImageScalarType, class ImageVectorType, class TLabelImage>
+DataObject::Pointer CombineBWAandRFFilter<ImageScalarType,  ImageVectorType,TLabelImage>
+::MakeOutput(unsigned int idx)
 {
     DataObject::Pointer output;
 
     switch ( idx )
     {
     case 0:
-        output = ( TOutputImage::New() ).GetPointer();
+        output = ( TLabelImage::New() ).GetPointer();
         break;
     case 1:
-        output = ( TInputImage::New() ).GetPointer();
+        output = ( ProbabilityType::New() ).GetPointer();
         break;
     default:
         std::cerr << "No output " << idx << std::endl;
@@ -85,208 +96,168 @@ DataObject::Pointer CombineBWAandRFFilter <TInputImage, TOutputImage>::MakeOutpu
     return output.GetPointer();
 }
 
-template<unsigned int VDim>
-void ExpandRegion(itk::ImageRegion<VDim> &region, const itk::Index<VDim> &idx)
+template< class ImageScalarType, class ImageVectorType, class TLabelImage>
+template< typename T2 >
+void
+CombineBWAandRFFilter <ImageScalarType,  ImageVectorType,TLabelImage>
+::ExpandRegion( typename T2::RegionType& region, const typename T2::IndexType& index )
 {
-    if(region.GetNumberOfPixels() == 0)
+    for ( unsigned int a = 0; a < T2::ImageDimension; ++a )
     {
-        region.SetIndex(idx);
-        for(size_t i = 0; i < VDim; i++)
-            region.SetSize(i, 1);
-    }
-    else {
-        for(size_t i = 0; i < VDim; i++)
+        if ( region.GetIndex( a ) > index[a] )
         {
-            if(region.GetIndex(i) > idx[i])
-            {
-                region.SetSize(i, region.GetSize(i) + (region.GetIndex(i) - idx[i]));
-                region.SetIndex(i, idx[i]);
-            }
-            else if(region.GetIndex(i) + (long) region.GetSize(i) <= idx[i]) {
-                region.SetSize(i, 1 + idx[i] - region.GetIndex(i));
-            }
+            region.SetSize( a, region.GetSize( a ) + region.GetIndex( a ) - index[a] );
+            region.SetIndex( a, index[a] );
         }
+        else if ( region.GetIndex( a ) + (typename T2::IndexValueType)region.GetSize( a ) <= index[a] )
+        {
+            region.SetSize( a, index[a] - region.GetIndex( a ) + 1 );
+        }
+        // else it is already within
     }
 }
 
-
-template< class TInputImage, class TOutputImage>
+template< class ImageScalarType, class ImageVectorType, class TLabelImage>
 void
-CombineBWAandRFFilter<TInputImage,TOutputImage>
+CombineBWAandRFFilter<ImageScalarType,  ImageVectorType,TLabelImage>
+::DetermineSliceOrientations()
+{
+    m_LabeledSlices.clear();
+    m_LabeledSlices.resize( TLabelImage::ImageDimension ); // initialize with empty sets
+    m_BoundingBoxes.clear();
+
+    typename TLabelImage::ConstPointer m_Input = this->GetSegmentationImage();
+    typename TLabelImage::Pointer m_Output = this->GetInterpolation();
+
+    typename TLabelImage::RegionType region = m_Output->GetRequestedRegion();
+    ImageRegionConstIteratorWithIndex< TLabelImage > it( m_Input, region );
+    while ( !it.IsAtEnd() )
+    {
+        typename TLabelImage::IndexType indPrev, indNext;
+        const typename TLabelImage::IndexType ind = it.GetIndex();
+        const typename TLabelImage::PixelType val = m_Input->GetPixel( ind );
+        if ( val != 0 )
+        {
+            typename TLabelImage::RegionType boundingBox1;
+            boundingBox1.SetIndex( ind );
+            for ( unsigned int a = 0; a < TLabelImage::ImageDimension; ++a )
+            {
+                boundingBox1.SetSize( a, 1 );
+            } //region of size [1,1,1]
+            std::pair< typename BoundingBoxesType::iterator, bool > resBB
+                    = m_BoundingBoxes.insert( std::make_pair( val, boundingBox1 ) );
+            if ( !resBB.second ) // include this index in existing BB
+            {
+                ExpandRegion< TLabelImage >( resBB.first->second, ind );
+            }
+
+            unsigned int cTrue = 0;
+            unsigned int cAdjacent = 0;
+            unsigned int axis = 0;
+            for ( unsigned int a = 0; a < TLabelImage::ImageDimension; ++a )
+            {
+                indPrev = ind;
+                indPrev[a]--;
+                indNext = ind;
+                indNext[a]++;
+                typename TLabelImage::PixelType prev = 0;
+                if ( region.IsInside( indPrev ) )
+                {
+                    prev = m_Input->GetPixel( indPrev );
+                }
+                typename TLabelImage::PixelType next = 0;
+                if ( region.IsInside( indNext ) )
+                {
+                    next = m_Input->GetPixel( indNext );
+                }
+                if ( prev == 0 && next == 0 ) // && - isolated slices only, || - flat edges too
+                {
+                    axis = a;
+                    ++cTrue;
+                }
+                else if ( prev == val && next == val )
+                {
+                    ++cAdjacent;
+                }
+            }
+            if ( cTrue == 1 && cAdjacent == TLabelImage::ImageDimension - 1 )
+                // slice has empty adjacent space only along one axis
+            {
+                // if ( m_Axis == -1 || m_Axis == int(axis) )
+                // {
+                m_LabeledSlices[axis][val].insert( ind[axis] );
+                //std::cout << ind << std::endl;
+                //}
+            }
+        }
+        ++it;
+    }
+
+} // >::DetermineSliceOrientations
+
+template< class ImageScalarType, class ImageVectorType, class TLabelImage>
+void
+CombineBWAandRFFilter <ImageScalarType,  ImageVectorType,TLabelImage>
 ::GenerateData()
 {
 
-    typename TInputImage::ConstPointer IntensityImage = this->GetIntensityImage();
-    typename TOutputImage::ConstPointer SegmentationImage = this->GetSegmentationImage();
+    typename TLabelImage::ConstPointer SegmentationImage = this->GetSegmentationImage();
 
-    // Find bounding box
-    typename TOutputImage::RegionType bbox;
+    //IOPixelType pixelType = this->ProcessObject::GetInput(0)->GetPixelType();
+    DataObject *dataobj = this->ProcessObject::GetInput(0);
 
-    // Find the extent of the non-background region of the image
-    itk::ImageRegionConstIterator<TOutputImage> it(SegmentationImage, SegmentationImage->GetBufferedRegion());
-    for( ; !it.IsAtEnd(); ++it)
-        if(it.Value() != 0)
-            ExpandRegion(bbox, it.GetIndex());
+    typename TLabelImage::Pointer m_Output = this->GetInterpolation();
+    this->AllocateOutputs();
 
-    // Make sure the bounding box is within the contents of the image
-    bbox.Crop(SegmentationImage->GetBufferedRegion());
+    this->DetermineSliceOrientations();
 
-    std::cout << "Bounding box size is " << bbox.GetSize() << std::endl;
-
-    // Chop off the region
-    typedef itk::RegionOfInterestImageFilter<TOutputImage, TOutputImage> TrimFilterInt;
-    typename TrimFilterInt::Pointer CropSegmentationImage = TrimFilterInt::New();
-    CropSegmentationImage->SetInput(SegmentationImage);
-    CropSegmentationImage->SetRegionOfInterest(bbox);
-    CropSegmentationImage->Update();
-
-    // Chop off the region
-    typedef itk::RegionOfInterestImageFilter<TInputImage, TInputImage> TrimFilterDouble;
-    typename TrimFilterDouble::Pointer CropIntensityImage = TrimFilterDouble::New();
-    CropIntensityImage->SetInput(IntensityImage);
-    CropIntensityImage->SetRegionOfInterest(bbox);
-    CropIntensityImage->Update();
-
-    // Determine which ones are the segmented slices
-    std::cout << "Determining slicing direction" << std::endl;
-
-    std::vector<int> nEmptySlices;
-
-    // Try first dimension
-    itk::ImageSliceConstIteratorWithIndex<TOutputImage> It_dim1( SegmentationImage, SegmentationImage->GetRequestedRegion() );
-    It_dim1.SetFirstDirection(1);
-    It_dim1.SetSecondDirection(2);
-
-    It_dim1.GoToBegin();
-    int counter = 0;
-    int value = 0;
-
-    while( !It_dim1.IsAtEnd() )
+    if ( m_BoundingBoxes.size() == 0)
     {
-        while( !It_dim1.IsAtEndOfSlice() )
-        {
-            while( !It_dim1.IsAtEndOfLine() )
-            {
-                if (It_dim1.Get() != 0){
-                    value = It_dim1.Get();
-                }
-                ++It_dim1;
-            }
-            It_dim1.NextLine();
-        }
-        if( value == 0){
-            ++counter; // count the number of empty slices
-        }
-        It_dim1.NextSlice();
-        value = 0;
+        ImageAlgorithm::Copy< TLabelImage, TLabelImage >( SegmentationImage.GetPointer(), m_Output.GetPointer(),
+                                                          m_Output->GetRequestedRegion(), m_Output->GetRequestedRegion() );
+        return; // no contours detected - no segmentations drawn
     }
 
-    nEmptySlices.push_back(counter);
-
-    // Try second dimension
-    itk::ImageSliceConstIteratorWithIndex<TOutputImage> It_dim2(SegmentationImage, SegmentationImage->GetRequestedRegion() );
-    It_dim2.SetFirstDirection(0);
-    It_dim2.SetSecondDirection(2);
-
-    It_dim2.GoToBegin();
-    counter = 0;
-    value = 0;
-
-    while( !It_dim2.IsAtEnd() )
+    typename TLabelImage::RegionType bbox;
+    // To dertemine slicing direcion,get the size of m_LabelledSlices along each axis
+    for ( unsigned i = 0; i < TLabelImage::ImageDimension; i++ ) // loop through axes
     {
-        while( !It_dim2.IsAtEndOfSlice() )
-        {
-            while( !It_dim2.IsAtEndOfLine() )
+        //std::cout << m_LabeledSlices[i].size() <<std::endl;
+        if (m_LabeledSlices[i].size())
+        { //if the axis has some labelled slices then
+            m_SlicingAxis = i;
+
+            // then determine the indices of the segmented slices
+            for ( typename LabeledSlicesType::iterator it = m_LabeledSlices[i].begin();it != m_LabeledSlices[i].end(); ++it )
             {
-                if (It_dim2.Get() != 0){
-                    value = It_dim2.Get();
+                //if ( m_Label == 0 || m_Label == it->first ) // label needs to be interpolated
+                if (1 == it->first ) //only interpolate label of value 1
+                {
+                    // Get the bounding box for label == 1
+                    for ( typename BoundingBoxesType::iterator iBB = m_BoundingBoxes.begin();iBB != m_BoundingBoxes.end(); ++iBB ){
+                        //if (m_Label == 0 || m_Label == iBB->first)
+                        {
+                            std::cout << "label value " << iBB->first << std::endl;
+                            bbox = iBB->second;
+                            std::cout << "bbox index " << bbox.GetIndex() << std::endl;
+                        }
+                    }
+
+                    for ( typename SliceSetType::iterator s = it->second.begin();
+                          s != it->second.end();
+                          ++s ){
+                        m_SegmentationIndices.push_back(*s - bbox.GetIndex()[i]);
+
+                    }
+
                 }
-                ++It_dim2;
             }
-            It_dim2.NextLine();
+
         }
-        It_dim2.NextSlice();
-        if( value == 0){
-            ++ counter;
-        }
-        value = 0;
     }
 
-    nEmptySlices.push_back(counter);
-
-    // Try third dimension
-    itk::ImageSliceConstIteratorWithIndex<TOutputImage> It_dim3(SegmentationImage, SegmentationImage->GetRequestedRegion() );
-    It_dim3.SetFirstDirection(0);
-    It_dim3.SetSecondDirection(1);
-
-    It_dim3.GoToBegin();
-    counter = 0;
-    value = 0;
-
-    while( !It_dim3.IsAtEnd() )
-    {
-        while( !It_dim3.IsAtEndOfSlice() )
-        {
-            while( !It_dim3.IsAtEndOfLine() )
-            {
-                if (It_dim3.Get() != 0){
-                    value = It_dim3.Get();
-                }
-                ++It_dim3;
-            }
-            It_dim3.NextLine();
-        }
-        It_dim3.NextSlice();
-        if( value == 0){
-            ++ counter;
-        }
-        value = 0;
-    }
-
-    nEmptySlices.push_back(counter);
-    m_SlicingAxis = std::distance(nEmptySlices.begin(), std::max_element(nEmptySlices.begin(), nEmptySlices.end()));
-
-    std::vector<int> dimensions;
-    dimensions.push_back(0);
-    dimensions.push_back(1);
-    dimensions.push_back(2);
-
-    dimensions.erase(dimensions.begin() + m_SlicingAxis);
-
-    //After determining slicing direction, can determine which slices have segmentations
-    itk::ImageSliceConstIteratorWithIndex<TOutputImage> It(SegmentationImage,SegmentationImage->GetRequestedRegion() );
-    It.SetFirstDirection(dimensions[0]);
-    It.SetSecondDirection(dimensions[1]);
-
-    It.GoToBegin();
-    counter = 1;
-    value = 0;
-
-    while( !It.IsAtEnd() )
-    {
-        while( !It.IsAtEndOfSlice() )
-        {
-            while( !It.IsAtEndOfLine() )
-            {
-                if (It.Get() != 0){
-                    value = It.Get();
-                }
-                ++It;
-            }
-            It.NextLine();
-        }
-        It.NextSlice();
-        if( value != 0){
-            m_SegmentationIndices.push_back(counter);
-        }
-        ++counter;
-        value = 0;
-    }
-    std::cout << "Slices containing segmentations are " << std::endl;
-    std::copy( m_SegmentationIndices.begin(),  m_SegmentationIndices.end(), std::ostream_iterator<int>(std::cout, " "));
-
-    // Create the BWA filter
-    std::cout << "\nPerforming BWA interpolation" << std::endl;
+    // Perform contour interpolation
+    std::cout << "Binary Weighted Averaging " << std::endl;
     typename BWAFilterType::Pointer BWAfilter = BWAFilterType::New();
     BWAfilter->SetInput(SegmentationImage);
     BWAfilter->SetIntermediateSlicesOnly(m_intermediateslices);
@@ -295,33 +266,39 @@ CombineBWAandRFFilter<TInputImage,TOutputImage>
     BWAfilter->SetBoundingBox(bbox);
     BWAfilter->Update();
 
-    typedef itk::ImageFileWriter<TInputImage>ThreeDWriterType;
-    typename ThreeDWriterType::Pointer writer1 = ThreeDWriterType::New();
-    writer1->SetInput(BWAfilter->GetProbabilityMap());
-    writer1->SetFileName("ProbabilityMap_BWA.nii" );
-    writer1->Update();
-
-    std::cout << "Generating RF label map" << std::endl;
     typename RFLabelFilterType::Pointer generateRFlabelmap = RFLabelFilterType::New();
     generateRFlabelmap->SetInput(SegmentationImage);
     generateRFlabelmap->SetSlicingAxis(m_SlicingAxis);
     generateRFlabelmap->Update(); // Background is 1, FG is 0
 
-    std::cout << "Performing random forest classification" << std::endl;
-    typename RandomForestFilterType::Pointer randomForestClassifier = RandomForestFilterType::New();
-    randomForestClassifier->SetInputImage(IntensityImage);
+    typename RandomForestClassifierType::Pointer randomForestClassifier = RandomForestClassifierType::New();
+
+    ImageScalarType *image = dynamic_cast<ImageScalarType *>(dataobj);
+    if(image)
+    {
+        randomForestClassifier->AddScalarImage(image);
+    }
+    else
+    {
+        ImageVectorType *vecImage = dynamic_cast<ImageVectorType *>(dataobj);
+        if(vecImage)
+        {
+            randomForestClassifier->AddVectorImage(vecImage);
+        }
+        else
+        {
+            itkAssertInDebugOrThrowInReleaseMacro(
+                        "Wrong input type to ImageCollectionConstRegionIteratorWithIndex");
+        }
+    }
+
+    std::cout << "Random Forest Classification " << std::endl;
     randomForestClassifier->SetLabelMap(generateRFlabelmap->GetOutput());
     randomForestClassifier->SetBoundingBox(bbox);
     randomForestClassifier->SetIntermediateSlicesOnly(m_intermediateslices);
     randomForestClassifier->SetSegmentationIndices(m_SegmentationIndices);
     randomForestClassifier->SetSlicingAxis(m_SlicingAxis);
     randomForestClassifier->Update();
-
-    typedef itk::ImageFileWriter<TInputImage>ThreeDWriterType;
-    typename ThreeDWriterType::Pointer writer = ThreeDWriterType::New();
-    writer->SetInput(randomForestClassifier->GetOutput());
-    writer->SetFileName("ProbabilityMap_RandomForest.nii" );
-    writer->Update();
 
     // Combine probability maps by taking the average
     typename AddImageFilterType::Pointer addProbabilityMaps = AddImageFilterType::New();
@@ -333,7 +310,7 @@ CombineBWAandRFFilter<TInputImage,TOutputImage>
     scaleProbabilityMap->SetConstant(0.5);
     scaleProbabilityMap->Update();
 
-    // Threshold the probability map to obtain the final segmentation
+    //Threshold the probability map to obtain the final segmentation
     typename BinaryThresholdFilterType::Pointer thresholdProbabilityMap = BinaryThresholdFilterType::New();
     thresholdProbabilityMap->SetInput(scaleProbabilityMap->GetOutput());
     thresholdProbabilityMap->SetLowerThreshold(0.5);
@@ -343,9 +320,6 @@ CombineBWAandRFFilter<TInputImage,TOutputImage>
 
     this->GetInterpolation()->Graft(thresholdProbabilityMap->GetOutput());
     this->GetProbabilityMap()->Graft(scaleProbabilityMap->GetOutput());
-
-    std::cout << "Output region size" << this->GetInterpolation()->GetLargestPossibleRegion().GetSize() << std::endl;
-    std::cout << "Output pmap region size" << this->GetProbabilityMap()->GetLargestPossibleRegion().GetSize() << std::endl;
 }
 
 }// end namespace

@@ -3,22 +3,26 @@
 
 #include "itkImageToImageFilter.h"
 #include "RFLibrary/RFTrain.h"
-#include "RFLibrary/RandomForestClassifyImageFilter.h"
 #include "RFLibrary/ImageCollectionToImageFilter.h"
 #include "itkVectorImage.h"
 #include "RFLibrary/Library/classifier.h"
 #include "RFLibrary/Library/classification.h"
 #include "RFLibrary/RandomForestClassifier.h"
 
+
 namespace itk
 {
-template< class TInputImage>
-class RandomForest : public ImageToImageFilter< TInputImage, TInputImage >
+
+
+typedef itk::Image<double,3> ProbabilityType;
+
+template< class ImageScalarType, class ImageVectorType, class TLabelImage>
+class RandomForest : public ImageToImageFilter< TLabelImage, ProbabilityType >
 {
 public:
     /** Standard class typedefs. */
     typedef RandomForest            Self;
-    typedef ImageToImageFilter< TInputImage, TInputImage > Superclass;
+    typedef ImageToImageFilter< TLabelImage, ProbabilityType > Superclass;
     typedef SmartPointer< Self >                 Pointer;
 
     /** Method for creation through the object factory. */
@@ -27,27 +31,20 @@ public:
     /** Run-time type information (and related methods). */
     itkTypeMacro(RandomForest, ImageToImageFilter);
 
-    /** The image to be inpainted in regions where the mask is white.*/
-    void SetInputImage(const TInputImage* image);
-
     /** The mask to be inpainted. White pixels will be inpainted, black pixels will be passed through to the output.*/
-    void SetLabelMap(const TInputImage* mask);
+    void SetLabelMap(const TLabelImage* mask);
 
-    typedef typename TInputImage::PixelType TPixel;
+    typedef typename TLabelImage::PixelType TPixel;
     typedef itk::VectorImage<TPixel,3 > VectorImageType;
     typedef RandomForestClassifier<TPixel, TPixel,3> RFClassifierType;
-    // Iterator for grouping images into a multi-component image
-    typedef ImageCollectionConstRegionIteratorWithIndex< TInputImage, VectorImageType> CollectionIter;
 
-    typedef itk::Image< double, 2 > T2DdoubleImage;
-    typedef itk::Image<int,3>T3DintImage;
 
     void SetSegmentationIndices(std::vector<int> SegmentationIndices)
     {
         m_SegmentationIndices = SegmentationIndices;
     }
 
-    void SetBoundingBox(typename T3DintImage::RegionType bbox){
+    void SetBoundingBox(typename TLabelImage::RegionType bbox){
         m_boundingbox = bbox;
     }
 
@@ -60,12 +57,19 @@ public:
         m_slicingaxis = SlicingAxis;
     }
 
+    /** Add a scalar input image */
+    void AddScalarImage(ImageScalarType *image);
+
+    /** Add a vector (multi-component) input image */
+    void AddVectorImage(ImageVectorType *image);
+
 protected:
     RandomForest();
     ~RandomForest(){}
 
-    typename TInputImage::Pointer GetInputImage();
-    typename TInputImage::Pointer GetLabelMap();
+    typename TLabelImage::Pointer GetLabelMap();
+
+//    DataObject::Pointer GetIntensityImage();
 
     DataObject::Pointer MakeOutput(unsigned int idx);
 
@@ -77,7 +81,7 @@ private:
     RandomForest(const Self &); //purposely not implemented
     void operator=(const Self &);  //purposely not implemented
     std::vector<int> m_SegmentationIndices;
-    typename T3DintImage::RegionType m_boundingbox;
+    typename TLabelImage::RegionType m_boundingbox;
     bool m_intermediateslices;
     int m_slicingaxis;
 

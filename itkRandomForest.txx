@@ -1,75 +1,79 @@
 #ifndef itkRandomForest_txx
 #define itkRandomForest_txx
 
-//#include "itkRandomForest.h"
-
+#include "RFLibrary/RandomForestClassifyImageFilter.h"
 #include "itkObjectFactory.h"
 #include "itkImageRegionConstIterator.h"
-#include "itkImageRegionIterator.h"
 #include <math.h>
+#include "IRISSlicer/IRISSlicer.h"
 #include <algorithm>
 
 namespace itk
 {
 
-template< class TInputImage>
-RandomForest<TInputImage>
+template< class ImageScalarType, class ImageVectorType, class TLabelImage>
+RandomForest<ImageScalarType, ImageVectorType, TLabelImage>
 ::RandomForest()
 {
     this->SetNumberOfRequiredInputs(2);
 }
 
-template< class TInputImage>
+template< class ImageScalarType, class ImageVectorType, class TLabelImage>
 void
-RandomForest<TInputImage>
-::SetInputImage(const TInputImage* image)
+RandomForest<ImageScalarType, ImageVectorType, TLabelImage>
+::AddScalarImage(ImageScalarType *image)
 {
-    this->SetNthInput(0, const_cast<TInputImage*>(image));
+  this->SetNthInput(0, const_cast<ImageScalarType*>(image));
+  //this->AddInput(image);
 }
 
-template< class TInputImage>
+template< class ImageScalarType, class ImageVectorType, class TLabelImage>
 void
-RandomForest<TInputImage>
-::SetLabelMap(const TInputImage* mask)
+RandomForest<ImageScalarType, ImageVectorType, TLabelImage>
+::AddVectorImage(ImageVectorType *image)
 {
-    this->SetNthInput(1, const_cast<TInputImage*>(mask));
+  this->SetNthInput(0, const_cast<ImageVectorType*>(image));
+  //this->AddInput(image);
 }
 
-template< class TInputImage>
-typename TInputImage::Pointer RandomForest<TInputImage>::GetInputImage()
+
+template< class ImageScalarType, class ImageVectorType, class TLabelImage>
+void
+RandomForest<ImageScalarType, ImageVectorType, TLabelImage>
+::SetLabelMap(const TLabelImage* mask)
 {
-    return static_cast< TInputImage * >
-            ( this->ProcessObject::GetInput(0) );
+    this->SetNthInput(1, const_cast<TLabelImage*>(mask));
 }
 
-template< class TInputImage>
-typename TInputImage::Pointer RandomForest<TInputImage>::GetLabelMap()
+template< class ImageScalarType, class ImageVectorType, class TLabelImage>
+typename TLabelImage::Pointer RandomForest<ImageScalarType, ImageVectorType, TLabelImage>
+::GetLabelMap()
 {
-    return static_cast< TInputImage * >
+    return static_cast< TLabelImage * >
             ( this->ProcessObject::GetInput(1) );
 }
 
-template< class TInputImage>
+template< class ImageScalarType, class ImageVectorType, class TLabelImage>
 void
-RandomForest<TInputImage>
+RandomForest<ImageScalarType, ImageVectorType, TLabelImage>
 ::GenerateData()
 {
 
-    typename TInputImage::Pointer intensity_image = this->GetInputImage();
-    typename TInputImage::Pointer label_image = this->GetLabelMap();
+    DataObject *intensity_obj = this->ProcessObject::GetInput(0);
+    typename TLabelImage::Pointer label_image = this->GetLabelMap();
 
     // Setup output 1
-    typename TInputImage::Pointer output = this->GetOutput();
-    output ->SetBufferedRegion(output->GetRequestedRegion());
-    output ->Allocate();
+    ProbabilityType::Pointer output = this->GetOutput();
+    output->SetBufferedRegion(output->GetRequestedRegion());
+    output->Allocate();
 
-    std::string rf_file = "myforest.rf";
-    const char * train_file = rf_file.c_str();
+/*    std::string rf_file = "myforest.rf";
+    const char * train_file = rf_file.c_str()*/;
     const int VDim = 3;
     RFParameters<TPixel, VDim> param;
 
     // Get the segmentation image - which determines the samples
-    typedef itk::ImageRegionConstIteratorWithIndex<TInputImage> LabelIter;
+    typedef itk::ImageRegionConstIteratorWithIndex<TLabelImage> LabelIter;
 
     // Shrink the buffered region by radius because we can't handle BCs
     itk::ImageRegion<VDim> reg = label_image->GetBufferedRegion();
@@ -82,13 +86,17 @@ RandomForest<TInputImage>
         if( (int) (0.5 + lit.Value()) > 0)
             nSamples++;
 
+    // Iterator for grouping images into a multi-component image
+    typedef ImageCollectionConstRegionIteratorWithIndex<
+        ImageScalarType,
+        ImageVectorType> CollectionIter;
+
     // Create an iterator for going over all the anatomical image data
     CollectionIter cit(reg);
     param.patch_radius.Fill(2); // Use a neighborhood patch for features
     cit.SetRadius(param.patch_radius);
 
-    // Add all the anatomical images to this iterator
-    cit.AddImage(intensity_image);
+    cit.AddImage(intensity_obj);
 
     // Get the number of components
     int nComp = cit.GetTotalComponents();
@@ -177,26 +185,25 @@ RandomForest<TInputImage>
     classifier->SetUseCoordinateFeatures(param.use_coordinate_features);
 
     // Dump the classifier to a file
-    std::ofstream out_file(train_file);
-    classifier->Write(out_file);
-    out_file.close();
+//    std::ofstream out_file(train_file);
+//    classifier->Write(out_file);
+//    out_file.close();
 
     /** Apply classifier */
-    std::cout << "applying classifier" << std::endl;
 
     // Apply bounding box and input cropped image into the random forest classifier
-    typename T3DintImage::SizeType bbox_size = m_boundingbox.GetSize();
+    typename TLabelImage::SizeType bbox_size = m_boundingbox.GetSize();
 
     // Set up requested region
-    typename TInputImage::SizeType regionSize;
+    typename TLabelImage::SizeType regionSize;
     regionSize[0] = 1;
     regionSize[1] = bbox_size[1];
     regionSize[2] = bbox_size[2];
 
-    typename T3DintImage::IndexType bbox_index = m_boundingbox.GetIndex();
+    typename TLabelImage::IndexType bbox_index = m_boundingbox.GetIndex();
 
     // Define the random forest classification filter
-    typedef RandomForestClassifyImageFilter<TInputImage, VectorImageType, TInputImage, TPixel> FilterType;
+    typedef RandomForestClassifyImageFilter <TLabelImage, ImageVectorType, ProbabilityType, TPixel> FilterType;
 
     // Create the filter for this label (TODO: this is wasting computation)
     typename FilterType::Pointer filter = FilterType::New();
@@ -208,15 +215,30 @@ RandomForest<TInputImage>
             const int numSlices =  m_SegmentationIndices[i+1] -  m_SegmentationIndices[i];
             int intermediate_slice = numSlices/2;
 
-            typename TInputImage::IndexType regionIndex;
-            regionIndex[0] = bbox_index[0] + m_SegmentationIndices[i] + intermediate_slice -1;
-            regionIndex[1] = bbox_index[1];
-            regionIndex[2] = bbox_index[2];
+            typename TLabelImage::IndexType regionIndex = bbox_index;
+            regionIndex[0] = bbox_index[0] + m_SegmentationIndices[i] + intermediate_slice; // took out -1
 
-            typename TInputImage::RegionType slice_region(regionIndex, regionSize);
+            typename TLabelImage::RegionType slice_region(regionIndex, regionSize);
 
             // Add all the images on the stack to the filter
-            filter->AddScalarImage(intensity_image);
+            ImageScalarType *image = dynamic_cast<ImageScalarType *>(intensity_obj);
+            if(image)
+              {
+              filter->AddScalarImage(image);
+              }
+            else
+              {
+              ImageVectorType *vecImage = dynamic_cast<ImageVectorType *>(intensity_obj);
+              if(vecImage)
+                {
+                filter->AddVectorImage(vecImage);
+                }
+              else
+                {
+                itkAssertInDebugOrThrowInReleaseMacro(
+                      "Wrong input type to ImageCollectionConstRegionIteratorWithIndex");
+                }
+              }
 
             // Pass the classifier to the filter
             filter->SetClassifier(classifier);
@@ -229,52 +251,12 @@ RandomForest<TInputImage>
             // Run the filter for this set of weights
             filter->Update();
 
-            typename TInputImage::Pointer RFprobability = filter->GetOutput(1);
+            ProbabilityType::Pointer RFprobability = filter->GetOutput(1);
             RFprobability->DisconnectPipeline();
 
             // Copy the probability map to the original image space
-            itk::ImageSliceConstIteratorWithIndex<TInputImage> It_source( RFprobability, RFprobability->GetRequestedRegion() );
-            It_source.SetFirstDirection(1);
-            It_source.SetSecondDirection(2);
-            It_source.GoToBegin();
-
-            itk::ImageSliceConstIteratorWithIndex<TInputImage> It_destination( output, output->GetLargestPossibleRegion() );
-            It_destination.SetFirstDirection(1);
-            It_destination.SetSecondDirection(2);
-            std::cout << "Initial index RF copying" << It_destination.GetIndex() << std::endl;
-
-            double pixel_val;
-            typename TInputImage::IndexType idx;
-            typename TInputImage::IndexType source_idx;
-
-            while( !It_source.IsAtEnd() )
-            {
-                while( !It_source.IsAtEndOfSlice() )
-                {
-
-                    while( !It_source.IsAtEndOfLine() )
-                    {
-
-                        idx  = It_destination.GetIndex();
-                        idx[0] = idx[0] +  bbox_index[0] + m_SegmentationIndices[i] + intermediate_slice -1;
-                        idx[1] = idx[1] + bbox_index[1] -1;
-                        idx[2] = idx[2] + bbox_index[2] -1;
-
-                        source_idx = It_source.GetIndex();
-
-                        pixel_val = RFprobability->GetPixel(source_idx);
-                        output->SetPixel(idx, pixel_val);
-
-                        ++It_source;
-                        ++It_destination;
-                    }
-                    It_source.NextLine();
-                    It_destination.NextLine();
-                }
-                It_source.NextSlice();
-                It_destination.NextSlice();
-                std::cout << idx << std::endl;
-            }
+            ImageAlgorithm::Copy< ProbabilityType, ProbabilityType >( RFprobability.GetPointer(), output.GetPointer(),
+              RFprobability->GetRequestedRegion(), slice_region);
 
         } // end of slice iterator
 
@@ -282,7 +264,7 @@ RandomForest<TInputImage>
     else{
         //Loop through all the slices not contained in m_SegmentationIndices;
         std::vector<int> sliceRange;
-        for( int i = 1; i <= bbox_size[m_slicingaxis]; i++ )
+        for( int i = 0; i < bbox_size[m_slicingaxis]; i++ )
             sliceRange.push_back( i );
 
         std::vector<int> noSegmentations;
@@ -290,20 +272,36 @@ RandomForest<TInputImage>
          std::set_difference(sliceRange.begin(), sliceRange.end(), m_SegmentationIndices.begin(), m_SegmentationIndices.end(),
                              std::inserter(noSegmentations, noSegmentations.begin()));
 
-        for ( unsigned int i = 0; i < noSegmentations.size(); i++ ){
+        for ( unsigned int i = 0; i < noSegmentations.size(); i++ ){ // took out -1
 
             int slice_index = noSegmentations[i];
 
-            typename TInputImage::IndexType regionIndex;
-            regionIndex[0] = bbox_index[0] + slice_index -1;
+            typename TLabelImage::IndexType regionIndex;
+            regionIndex[0] = bbox_index[0] + slice_index; // took out -1
             regionIndex[1] = bbox_index[1];
             regionIndex[2] = bbox_index[2];
 
-            typename TInputImage::RegionType slice_region(regionIndex, regionSize);
+            typename TLabelImage::RegionType slice_region(regionIndex, regionSize);
 
             // Add all the images on the stack to the filter
-            filter->AddScalarImage(intensity_image);
-
+            ImageScalarType *image = dynamic_cast<ImageScalarType *>(intensity_obj);
+            if(image)
+              {
+              filter->AddScalarImage(image);
+              }
+            else
+              {
+              ImageVectorType *vecImage = dynamic_cast<ImageVectorType *>(intensity_obj);
+              if(vecImage)
+                {
+                filter->AddVectorImage(vecImage);
+                }
+              else
+                {
+                itkAssertInDebugOrThrowInReleaseMacro(
+                      "Wrong input type to ImageCollectionConstRegionIteratorWithIndex");
+                }
+              }
             // Pass the classifier to the filter
             filter->SetClassifier(classifier);
 
@@ -315,50 +313,13 @@ RandomForest<TInputImage>
             // Run the filter for this set of weights
             filter->Update();
 
-            typename TInputImage::Pointer RFprobability = filter->GetOutput(1);
+            ProbabilityType::Pointer RFprobability = filter->GetOutput(1);
             RFprobability->DisconnectPipeline();
 
             // Copy the probability map to the original image space
 
-            itk::ImageSliceConstIteratorWithIndex<TInputImage> It_source( RFprobability, RFprobability->GetRequestedRegion() );
-            It_source.SetFirstDirection(1);
-            It_source.SetSecondDirection(2);
-            It_source.GoToBegin();
-
-            itk::ImageSliceConstIteratorWithIndex<TInputImage> It_destination( output, output->GetLargestPossibleRegion() );
-            It_destination.SetFirstDirection(1);
-            It_destination.SetSecondDirection(2);
-
-            double pixel_val;
-            typename TInputImage::IndexType idx;
-            typename TInputImage::IndexType source_idx;
-
-            while( !It_source.IsAtEnd() )
-            {
-                while( !It_source.IsAtEndOfSlice() )
-                {
-
-                    while( !It_source.IsAtEndOfLine() )
-                    {
-
-                        idx  = It_destination.GetIndex();
-                        idx[0] = idx[0] +  bbox_index[0] + slice_index -1;
-                        idx[1] = idx[1] + bbox_index[1] -1;
-                        idx[2] = idx[2] + bbox_index[2] -1;
-                        source_idx = It_source.GetIndex();
-
-                        pixel_val = RFprobability->GetPixel(source_idx);
-                        output->SetPixel(idx, pixel_val);
-
-                        ++It_source;
-                        ++It_destination;
-                    }
-                    It_source.NextLine();
-                    It_destination.NextLine();
-                }
-                It_source.NextSlice();
-                It_destination.NextSlice();
-            }
+            ImageAlgorithm::Copy< ProbabilityType, ProbabilityType >( RFprobability.GetPointer(), output.GetPointer(),
+              RFprobability->GetRequestedRegion(), slice_region);
 
         } // end of slice iterator
 

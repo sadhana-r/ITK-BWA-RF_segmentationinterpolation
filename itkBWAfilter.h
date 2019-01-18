@@ -2,7 +2,6 @@
 #define itkBWAfilter_H
 
 #include "itkImageToImageFilter.h"
-#include "itkImageFileWriter.h"
 #include "itkAndImageFilter.h"
 #include "itkSubtractImageFilter.h"
 #include "itkConnectedComponentImageFilter.h"
@@ -14,16 +13,18 @@
 #include "itkComputeInterpolation.h"
 #include "itkMaximumImageFilter.h"
 #include "itkSignedMaurerDistanceMapImageFilter.h"
+#include "itkPermuteAxesImageFilter.h"
+#include "itkFlipImageFilter.h"
 
 namespace itk
 {
-template< class TInputImage, class TOutputImage>
-class BinaryWeightedAveragingFilter:public ImageToImageFilter< TInputImage, TInputImage >
+template< class TLabelImage, class TMainImage>
+class BinaryWeightedAveragingFilter:public ImageToImageFilter< TLabelImage, TLabelImage >
 {
 public:
     /** Standard class typedefs. */
     typedef BinaryWeightedAveragingFilter Self;
-    typedef ImageToImageFilter< TInputImage, TInputImage > Superclass;
+    typedef ImageToImageFilter< TLabelImage, TLabelImage > Superclass;
     typedef SmartPointer< Self > Pointer;
 
     /** Method for creation through the object factory. */
@@ -32,31 +33,41 @@ public:
     /** Run-time type information (and related methods). */
     itkTypeMacro(BinaryWeightedAveragingFilter, ImageToImageFilter);
 
-    TInputImage* GetInterpolation();
-    TOutputImage* GetProbabilityMap();
-
-    /** Image type information. */
-    typedef itk::Image< int, 2 > T2DintImage;
-    typedef itk::Image< double, 2 > T2DdoubleImage;
+    TLabelImage* GetInterpolation();
+    TMainImage* GetProbabilityMap();
 
     /** Extract some information from the image types.  Dimensionality
    * of the two images is assumed to be the same. */
-    typedef typename TInputImage::PixelType          InputPixelType;
-    typedef typename TInputImage::InternalPixelType  InputInternalPixelType;
+    typedef typename TLabelImage::PixelType          LabelPixelType;
+    typedef typename TLabelImage::InternalPixelType  LabelInternalPixelType;
+
+    typedef typename TMainImage::PixelType          MainPixelType;
+    typedef typename TMainImage::InternalPixelType  MainInternalPixelType;
+
+    /** Image type information. */
+    typedef itk::Image< LabelPixelType, TLabelImage::ImageDimension - 1 > TLabelImageSliceType;
+    typedef itk::Image< MainPixelType, TMainImage::ImageDimension - 1 > TMainImageSliceType;
 
     /** Initialize ITK filters required */
-    typedef itk::AndImageFilter<T2DintImage,T2DintImage,T2DintImage>AndImageFilterType;
-    typedef itk::SubtractImageFilter<T2DintImage,T2DintImage,T2DintImage>SubtractImageFilterType;
-    typedef itk::OrImageFilter<T2DintImage,T2DintImage,T2DintImage>OrImageFilterType;
-    typedef itk::BinaryThresholdImageFilter<T2DintImage, T2DintImage>BinaryThresholdImageFilterType;
-    typedef itk::ConnectedComponentImageFilter <T2DintImage,T2DintImage >ConnectedComponentImageFilterType;
-    typedef itk::SignedMaurerDistanceMapImageFilter<T2DintImage, T2DdoubleImage> SignedDistanceMapFilterType;
-    typedef itk::TileImageFilter< T2DintImage, TInputImage > TilerType;
-    typedef itk::TileImageFilter< T2DdoubleImage, TOutputImage > DoubleTilerType;
-    typedef itk::OrImageFilter<TInputImage,TInputImage,TInputImage>ThreeDOrImageFilterType;
-    typedef itk::ComputeInterpolation< T2DdoubleImage, T2DintImage>  InterpolationFilterType;
-    typedef itk::MaximumImageFilter< TOutputImage>  MaximumImageFilterType;
-    typedef itk::MaximumImageFilter< T2DdoubleImage>  T2DMaximumImageFilterType;
+    typedef itk::AndImageFilter<TLabelImageSliceType,TLabelImageSliceType,TLabelImageSliceType>AndImageFilterType;
+    typedef itk::SubtractImageFilter<TLabelImageSliceType,TLabelImageSliceType,TLabelImageSliceType>SubtractImageFilterType;
+    typedef itk::OrImageFilter<TLabelImageSliceType,TLabelImageSliceType,TLabelImageSliceType>OrImageFilterType;
+    typedef itk::BinaryThresholdImageFilter<TLabelImageSliceType, TLabelImageSliceType>BinaryThresholdImageFilterType;
+    typedef itk::ConnectedComponentImageFilter <TLabelImageSliceType,TLabelImageSliceType >ConnectedComponentImageFilterType;
+    typedef itk::SignedMaurerDistanceMapImageFilter<TLabelImageSliceType, TMainImageSliceType> SignedDistanceMapFilterType;
+    typedef itk::TileImageFilter< TLabelImageSliceType, TLabelImage > TilerType;
+    typedef itk::TileImageFilter< TMainImageSliceType, TMainImage > DoubleTilerType;
+    typedef itk::OrImageFilter<TLabelImage,TLabelImage,TLabelImage>ThreeDOrImageFilterType;
+    typedef itk::ComputeInterpolation< TMainImageSliceType, TLabelImageSliceType>  InterpolationFilterType;
+    typedef itk::MaximumImageFilter< TMainImage>  MaximumImageFilterType;
+    typedef itk::MaximumImageFilter< TMainImageSliceType>  T2DMaximumImageFilterType;
+
+    typedef itk::PermuteAxesImageFilter < TLabelImage> PermuteAxesImageFilterType;
+    typedef itk::PermuteAxesImageFilter < TMainImage> PermuteAxesDoubleImageFilterType;
+    typedef itk::FlipImageFilter < TLabelImage> FlipImageFilterType;
+    typedef itk::FlipImageFilter < TMainImage> FlipDoubleImageFilterType;
+    typedef itk::FlipImageFilter < TLabelImageSliceType > FlipSliceImageFilterType;
+    typedef itk::FlipImageFilter < TMainImageSliceType > FlipDoubleSliceImageFilterType;
 
     void SetIntermediateSlicesOnly(bool flag)
     {
@@ -67,7 +78,7 @@ public:
         m_SegmentationIndices = seg_index;
     }
 
-    void SetBoundingBox(typename TInputImage::RegionType bbox){
+    void SetBoundingBox(typename TLabelImage::RegionType bbox){
         m_boundingbox = bbox;
     }
 
@@ -93,7 +104,7 @@ private:
     int m_slicingaxis;
     int m_firstdirection;
     int m_seconddirection;
-    typename TInputImage::RegionType m_boundingbox;
+    typename TLabelImage::RegionType m_boundingbox;
 
     template <typename TImage>
     void CreateImage(TImage* const image, int numRows, int numCols)

@@ -2,13 +2,14 @@
 #define itkRFLabelMap_txx
 
 #include "itkObjectFactory.h"
+//#include "itkRFLabelMap.h"
 
 namespace itk
 {
 
-template< class TInputImage, class TOutputImage>
+template< class TInputImage>
 void
-RFLabelMap<TInputImage,TOutputImage>
+RFLabelMap<TInputImage>
 ::GenerateData()
 {
 
@@ -44,7 +45,6 @@ RFLabelMap<TInputImage,TOutputImage>
     AddImages->Update();
 
     this->GetOutput()->Graft(AddImages->GetOutput());
-
 }
 
 }// end namespace

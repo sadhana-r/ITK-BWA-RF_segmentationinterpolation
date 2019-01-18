@@ -10,13 +10,13 @@
 
 namespace itk
 {
-template< class TInputImage, class TOutputImage>
-class RFLabelMap : public ImageToImageFilter< TInputImage, TOutputImage >
+template< class TInputImage>
+class RFLabelMap : public ImageToImageFilter< TInputImage,TInputImage >
 {
 public:
     /** Standard class typedefs. */
     typedef RFLabelMap            Self;
-    typedef ImageToImageFilter< TInputImage, TOutputImage > Superclass;
+    typedef ImageToImageFilter< TInputImage, TInputImage > Superclass;
     typedef SmartPointer< Self >                 Pointer;
 
     /** Method for creation through the object factory. */
@@ -33,8 +33,7 @@ public:
     typedef typename TInputImage::PixelType TPixel;
     typedef itk::BinaryBallStructuringElement< TPixel,3 > StructuringElementType;
     typedef itk::BinaryDilateImageFilter <TInputImage, TInputImage, StructuringElementType> BinaryDilateImageFilterType;
-    typedef itk::CastImageFilter < TInputImage, TOutputImage> CastImageFilterType;
-    typedef itk::AddImageFilter < TInputImage, TInputImage, TOutputImage> AddImageFilterType;
+    typedef itk::AddImageFilter < TInputImage, TInputImage, TInputImage> AddImageFilterType;
 
 protected:
     RFLabelMap(){}
